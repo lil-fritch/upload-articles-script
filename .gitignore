@@ -1,0 +1,16 @@
+venv/
+.env
+debug_states/
+lancedb_sessions/
+local_scripts/
+data/output/debug_states/
+data/output/articles/
+data/db/lancedb_sessions/
+data/output/topic_cache/
+data/output/images/covers/
+data/output/daemon_state.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
