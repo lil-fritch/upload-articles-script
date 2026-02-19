@@ -11,6 +11,7 @@ class TelegramBot:
         self.token = settings.TELEGRAM_BOT_TOKEN
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.base_url = f"https://api.telegram.org/bot{self.token}"
+        self._pending_tasks = []
 
     async def send_message(self, text: str):
         if not self.token or not self.chat_id:
@@ -29,8 +30,16 @@ class TelegramBot:
                 async with session.post(url, json=payload) as response:
                     if response.status != 200:
                         logger.error(f"Failed to send Telegram message: {await response.text()}")
+                    else:
+                        logger.info(f"Telegram message sent: {text[:100]}")
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
+
+    async def send_message_fire_and_forget(self, text: str):
+        """Send message without waiting for completion. Task is stored for cleanup."""
+        task = asyncio.create_task(self.send_message(text))
+        self._pending_tasks.append(task)
+        task.add_done_callback(lambda t: self._pending_tasks.remove(t) if t in self._pending_tasks else None)
 
     async def send_photo(self, photo_path: str, caption: str = ""):
         if not self.token or not self.chat_id:
@@ -57,6 +66,8 @@ class TelegramBot:
                     async with session.post(url, data=data) as response:
                         if response.status != 200:
                             logger.error(f"Failed to send Telegram photo: {await response.text()}")
+                        else:
+                            logger.info(f"Telegram photo sent: {photo_path}")
         except Exception as e:
             logger.error(f"Error sending Telegram photo: {e}")
 
@@ -85,6 +96,8 @@ class TelegramBot:
                     async with session.post(url, data=data) as response:
                         if response.status != 200:
                             logger.error(f"Failed to send Telegram document: {await response.text()}")
+                        else:
+                            logger.info(f"Telegram document sent: {file_path}")
         except Exception as e:
             logger.error(f"Error sending Telegram document: {e}")
 

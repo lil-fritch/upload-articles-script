@@ -28,13 +28,18 @@ class Settings(BaseSettings):
     # IMAGE_API_KEY is now shared with LLM_API_KEY
     IMAGE_MODEL: str = "exolabs/FLUX.1-dev-8bit"
     IMAGE_POLL_INTERVAL: float = 10.0
+    IMAGE_MAX_WAIT: float = 1500
+
+    # Text Generation Polling Config (for async LLM APIs)
+    TEXT_POLL_INTERVAL: float = 1.0
+    TEXT_MAX_WAIT: float = 1.0
 
     # Telegram Config
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
     # Langfuse Config
-    IMAGE_MAX_WAIT: float = 1500
+    LANGFUSE_SECRET_KEY: str = ""
 
     # Langfuse Config
     LANGFUSE_SECRET_KEY: str = ""
@@ -81,6 +86,9 @@ IMAGE_API_KEY = settings.LLM_API_KEY
 IMAGE_MODEL = settings.IMAGE_MODEL
 IMAGE_POLL_INTERVAL = settings.IMAGE_POLL_INTERVAL
 IMAGE_MAX_WAIT = settings.IMAGE_MAX_WAIT
+
+TEXT_POLL_INTERVAL = settings.TEXT_POLL_INTERVAL
+TEXT_MAX_WAIT = settings.TEXT_MAX_WAIT
 
 # Default for legacy code (planning phase uses fast model)
 LLM_MODEL = settings.LLM_MODEL_FAST

@@ -112,13 +112,15 @@ STRICT PROHIBITIONS (Violations = Failure):
 
 WRITING INSTRUCTIONS:
 - Tone: Expert, enthusiastic, but grounded in math (RTP/Volatility).
-- Formatting: Use clean Markdown. Use <b>bolding</b> for key metrics.
+- Formatting: Use clean Markdown ONLY. Use **bold** for key metrics (NOT HTML tags like <b>).
+- Structure: Divide content into logical subsections with ## H2 or ### H3 headers where appropriate. Do not write one solid block of text.
 - Conflict Resolution: If Research Context contradicts Hard Specs, TRUST HARD SPECS.
 - Flow: Do not start with "In this section...". Jump straight into the value.
 - Anti-repetition: Do not repeat the same metric (RTP, volatility, max win) more than once in this section. If it is not essential to this section, omit it.
 - Anti-repetition: Avoid reusing identical phrases from other sections. This section must add new value or angle.
 - Myth-buster pivot: If debunking a claim, state the truth once, then offer a practical alternative path (demo play, welcome bonus types, low-wagering offers, where to play) without naming specific casinos or inventing offers.
 - Advice: Prefer 2-3 concrete, actionable tips over generic filler.
+- Headings: Use markdown headers (## or ###) for subsections, NOT HTML.
 
 OUTPUT:
 Write ONLY the content for the section "{section_title}".

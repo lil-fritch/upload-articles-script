@@ -18,6 +18,8 @@ from .config import (
     IMAGE_MODEL,
     IMAGE_POLL_INTERVAL,
     IMAGE_MAX_WAIT,
+    TEXT_POLL_INTERVAL,
+    TEXT_MAX_WAIT,
     settings,
 )
 from src.services.telegram_bot import telegram_bot
@@ -61,11 +63,11 @@ class LLMClient:
     def _record_success(self):
         self._consecutive_errors = 0
 
-    def _record_failure(self):
+    async def _record_failure(self):
         self._consecutive_errors += 1
         if self._consecutive_errors >= 10:
             msg = "LLM failed 10 requests in a row. Stopping."
-            asyncio.create_task(telegram_bot.send_message(msg))
+            await telegram_bot.send_message(msg)
             raise RuntimeError(msg)
 
     def generate(self, prompt, temperature=0.7):
@@ -116,53 +118,196 @@ class LLMClient:
             }
 
         timeout = aiohttp.ClientTimeout(total=300)
+
+        # First request to submit the task
+        task_id = None
+        data = None
+
         for attempt in range(5):
             try:
                 async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
                     async with session.post(endpoint, json=payload) as response:
                         response.raise_for_status()
                         data = await response.json()
-                        if is_chat_completions:
-                            result_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        else:
-                            result_text = data.get("response", "")
 
-                        if self.langfuse:
-                            try:
-                                generation = self.langfuse.start_generation(
-                                    name="llm_generation",
-                                    model=self.model,
-                                    input=prompt,
-                                    output=result_text,
-                                    metadata={"temperature": temperature, "attempt": attempt + 1, "endpoint": endpoint}
-                                )
-                                generation.end()
-                            except Exception as lf_e:
-                                logger.warning(f"Langfuse logging failed: {lf_e}")
-                        self._record_success()
-                        return result_text
+                        # Check for immediate response (synchronous mode)
+                        if "choices" in data:
+                            result_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            if self.langfuse:
+                                try:
+                                    generation = self.langfuse.start_generation(
+                                        name="llm_generation",
+                                        model=self.model,
+                                        input=prompt,
+                                        output=result_text,
+                                        metadata={"temperature": temperature, "attempt": attempt + 1, "endpoint": endpoint, "mode": "sync"}
+                                    )
+                                    generation.end()
+                                except Exception as lf_e:
+                                    logger.warning(f"Langfuse logging failed: {lf_e}")
+                            self._record_success()
+                            return result_text
+
+                        # Check for task_id (asynchronous mode)
+                        task_id = data.get("task_id") or data.get("id")
+                        if task_id:
+                            break  # Proceed to polling
+
+                        # If no choices and no task_id, something went wrong
+                        logger.warning(f"LLM response missing both 'choices' and 'task_id': {data}")
+                        msg = f"LLM response invalid. Retrying..."
+                        asyncio.ensure_future(telegram_bot.send_message(msg))
+                        try:
+                            await self._record_failure()
+                        except RuntimeError:
+                            raise
+                        await asyncio.sleep((attempt + 1) * 2)
+                        continue
+
             except asyncio.TimeoutError:
+                msg = f"LLM Submit Timeout (Attempt {attempt+1}/5)."
+                logger.warning(msg)
+                asyncio.ensure_future(telegram_bot.send_message(msg))
                 try:
-                    self._record_failure()
+                    await self._record_failure()
                 except RuntimeError:
                     raise
                 wait_time = (attempt + 1) * 5
-                logger.warning(f"LLM Timeout (Attempt {attempt+1}/5). Cooling down {wait_time}s...")
                 await asyncio.sleep(wait_time)
             except Exception as e:
+                msg = f"LLM Submit Error: {e} (Attempt {attempt+1}/5)."
+                logger.warning(msg)
+                asyncio.ensure_future(telegram_bot.send_message(msg))
                 try:
-                    self._record_failure()
+                    await self._record_failure()
                 except RuntimeError:
                     raise
                 wait_time = (attempt + 1) * 2
-                msg = f"LLM Error: {e} (Attempt {attempt+1}/5). Retrying in {wait_time}s..."
-                logger.warning(msg)
-                asyncio.create_task(telegram_bot.send_message(msg))
                 await asyncio.sleep(wait_time)
 
-        final_error = "LLM Generation failed after 5 attempts."
-        logger.error(final_error)
-        asyncio.create_task(telegram_bot.send_message(final_error))
+        # If we got here without task_id, all attempts failed
+        if not task_id:
+            final_error = "LLM Generation failed after 5 attempts (no task_id)."
+            logger.error(final_error)
+            asyncio.ensure_future(telegram_bot.send_message(final_error))
+            return ""
+
+        # Build base URL for polling (extract scheme + host from api_url)
+        # e.g. "http://exo.renew.wtf/v1/chat/completions?async=true" -> "http://exo.renew.wtf"
+        from urllib.parse import urlparse
+        parsed = urlparse(self.api_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        task_url = f"{base_url}/v1/tasks/{task_id}"
+
+        start_time = time.monotonic()
+        logger.debug(f"TEXT POLLING: TaskID={task_id} | max_wait={TEXT_MAX_WAIT}s | poll={TEXT_POLL_INTERVAL}s")
+
+        poll_timeout = aiohttp.ClientTimeout(total=TEXT_MAX_WAIT)
+
+        while True:
+            if time.monotonic() - start_time > TEXT_MAX_WAIT:
+                logger.error(f"TEXT POLLING: Timeout after {TEXT_MAX_WAIT}s. TaskID={task_id}")
+                msg = f"LLM polling timed out after {TEXT_MAX_WAIT}s."
+                asyncio.ensure_future(telegram_bot.send_message(msg))
+                try:
+                    await self._record_failure()
+                except RuntimeError:
+                    raise
+                # Retry: start new request from beginning
+                return await self.async_generate(prompt, temperature)
+
+            await asyncio.sleep(TEXT_POLL_INTERVAL)
+
+            try:
+                async with aiohttp.ClientSession(timeout=poll_timeout, headers=headers) as poll_session:
+                    async with poll_session.get(task_url) as poll_response:
+                        if poll_response.status not in (200, 201):
+                            poll_text = await poll_response.text()
+                            logger.error(f"TEXT POLLING: Task poll failed ({poll_response.status}): {poll_text}")
+                            msg = f"LLM polling failed ({poll_response.status})."
+                            asyncio.ensure_future(telegram_bot.send_message(msg))
+                            try:
+                                await self._record_failure()
+                            except RuntimeError:
+                                raise
+                            continue
+                        poll_data = await poll_response.json()
+
+                status = poll_data.get("status")
+                elapsed = time.monotonic() - start_time
+                logger.info(f"TEXT POLLING: Status={status} | TaskID={task_id} | Elapsed={elapsed:.1f}s")
+
+                if status in ("completed", "succeeded"):
+                    # Extract result from completed task
+                    # Check for 'result' object first (Exo Labs format)
+                    result = poll_data.get("result", {})
+                    if isinstance(result, dict):
+                        choices = result.get("choices", [])
+                        if choices:
+                            result_text = choices[0].get("message", {}).get("content", "")
+                        else:
+                            logger.warning(f"TEXT POLLING: Completed but no choices in result: {poll_data}")
+                            result_text = ""
+                    else:
+                        # Fallback: check root level
+                        choices = poll_data.get("choices", [])
+                        if choices:
+                            result_text = choices[0].get("message", {}).get("content", "")
+                        else:
+                            logger.warning(f"TEXT POLLING: Completed but no choices found: {poll_data}")
+                            result_text = ""
+
+                    if self.langfuse:
+                        try:
+                            generation = self.langfuse.start_generation(
+                                name="llm_generation",
+                                model=self.model,
+                                input=prompt,
+                                output=result_text,
+                                metadata={"temperature": temperature, "endpoint": endpoint, "mode": "async_polling", "task_id": task_id}
+                            )
+                            generation.end()
+                        except Exception as lf_e:
+                            logger.warning(f"Langfuse logging failed: {lf_e}")
+
+                    self._record_success()
+                    logger.debug(f"TEXT POLLING: Completed successfully. TaskID={task_id}")
+                    return result_text
+
+                if status in ("failed", "error"):
+                    logger.error(f"TEXT POLLING: Task failed: {poll_data}")
+                    msg = f"LLM polling task failed. Status: {status}"
+                    asyncio.ensure_future(telegram_bot.send_message(msg))
+                    try:
+                        await self._record_failure()
+                    except RuntimeError:
+                        raise
+                    return ""
+
+                if status == "processing":
+                    # Still processing, continue polling
+                    continue
+
+            except asyncio.TimeoutError:
+                logger.warning(f"TEXT POLLING: Poll timeout. TaskID={task_id}.")
+                msg = f"LLM polling timeout. TaskID={task_id}."
+                asyncio.ensure_future(telegram_bot.send_message(msg))
+                try:
+                    await self._record_failure()
+                except RuntimeError:
+                    raise
+                continue
+            except Exception as e:
+                logger.error(f"TEXT POLLING: Error: {e}. TaskID={task_id}.")
+                msg = f"LLM polling error: {e}."
+                asyncio.ensure_future(telegram_bot.send_message(msg))
+                try:
+                    await self._record_failure()
+                except RuntimeError:
+                    raise
+                await asyncio.sleep(TEXT_POLL_INTERVAL)
+
+        # Should never reach here
         return ""
 
     def get_embeddings(self, text: str) -> list:
@@ -191,18 +336,22 @@ class LLMClient:
                         self._record_success()
                         return data.get("embedding", [])
             except asyncio.TimeoutError:
+                msg = f"Embedding timeout (Attempt {attempt+1}/2)."
+                asyncio.ensure_future(telegram_bot.send_message(msg))
+                logger.warning(f"Embedding Timeout (Attempt {attempt+1}/2).")
                 try:
-                    self._record_failure()
+                    await self._record_failure()
                 except RuntimeError:
                     raise
-                logger.warning(f"Embedding Timeout (Attempt {attempt+1}/2). Retrying...")
                 await asyncio.sleep(0.5)
             except Exception as e:
+                msg = f"Embedding error: {e}"
+                asyncio.ensure_future(telegram_bot.send_message(msg))
+                logger.warning(f"Embedding Error: {e}")
                 try:
-                    self._record_failure()
+                    await self._record_failure()
                 except RuntimeError:
                     raise
-                logger.warning(f"Embedding Error: {e}")
                 if attempt == 1:
                     break
                 await asyncio.sleep(0.5)
@@ -272,15 +421,21 @@ class LLMClient:
 
             start = time.monotonic()
             max_wait = max_wait if max_wait is not None else IMAGE_MAX_WAIT
-            logger.info(f"Image task started: {task_id} | max_wait={max_wait}s | poll={IMAGE_POLL_INTERVAL}s")
-            
+            logger.debug(f"Image task started: {task_id} | max_wait={max_wait}s | poll={IMAGE_POLL_INTERVAL}s")
+
             poll_url_base = f"{self.image_api_url.rstrip('/')}/v1/tasks/"
-            
+
             # Polling with a new session that persists or is created per request
             async with aiohttp.ClientSession(headers=headers) as poll_session:
                 while True:
                     if time.monotonic() - start > max_wait:
                         logger.error(f"Image generation timed out after {max_wait}s. Task: {task_id}")
+                        msg = f"Image generation timed out after {max_wait}s."
+                        asyncio.ensure_future(telegram_bot.send_message(msg))
+                        try:
+                            await self._record_failure()
+                        except RuntimeError:
+                            raise
                         return ""
 
                     await asyncio.sleep(IMAGE_POLL_INTERVAL)
@@ -289,18 +444,24 @@ class LLMClient:
                         if poll_response.status not in (200, 201):
                             poll_text = await poll_response.text()
                             logger.error(f"Image task poll failed ({poll_response.status}): {poll_text}")
-                            return ""
+                            msg = f"Image generation polling failed ({poll_response.status})."
+                            asyncio.ensure_future(telegram_bot.send_message(msg))
+                            try:
+                                await self._record_failure()
+                            except RuntimeError:
+                                raise
+                            continue
                         poll_data = await poll_response.json()
 
                     status = poll_data.get("status")
-                    logger.info(f"IMAGE POLLING: Status={status} | TaskID={task_id} | Elapsed={time.monotonic() - start:.1f}s")
-                    
+                    logger.debug(f"IMAGE POLLING: Status={status} | TaskID={task_id} | Elapsed={time.monotonic() - start:.1f}s")
+
                     if status == "completed" or status == "succeeded":
                         # Exo Labs / Flux format often returns 'result' object with 'url'
                         result = poll_data.get("result", {})
                         # Try different locations for the URL depending on provider format
                         result_url = result.get("url") if isinstance(result, dict) else poll_data.get("result_url")
-                        
+
                         # Fallback: sometimes result is just the URL string
                         if not result_url and isinstance(result, str) and result.startswith("http"):
                              result_url = result
@@ -314,31 +475,56 @@ class LLMClient:
                              output = poll_data.get("output")
                              if output and isinstance(output, list) and len(output) > 0:
                                  result_url = output[0]
-                        
+
                         if not result_url:
                             logger.error(f"Image task completed but result URL missing. Data: {poll_data}")
                             return ""
-                            
+
                         # Handle relative URLs
                         if result_url.startswith("/"):
                              base = self.image_api_url.rstrip('/')
                              # If API is something like https://example.com/v1, we usually want https://example.com
                              # But here let's be simpler: if result is /images/..., join with base
-                             
+
                              from urllib.parse import urlparse
                              parsed_api = urlparse(base)
                              # Construct base like https://hostname
                              host_base = f"{parsed_api.scheme}://{parsed_api.netloc}"
-                             
+
                              return urljoin(host_base, result_url)
-                        
+
                         return result_url
 
                     if status in ("failed", "error"):
                         logger.error(f"Image task failed: {poll_data}")
+                        msg = f"Image task failed. Status: {status}"
+                        asyncio.ensure_future(telegram_bot.send_message(msg))
+                        try:
+                            await self._record_failure()
+                        except RuntimeError:
+                            raise
                         return ""
+
+                    if status == "processing":
+                        # Still processing, continue polling
+                        continue
+        except asyncio.TimeoutError:
+            logger.error(f"Image generation timeout error: {task_id}")
+            msg = f"Image generation timeout. TaskID={task_id}"
+            asyncio.ensure_future(telegram_bot.send_message(msg))
+            try:
+                await self._record_failure()
+            except RuntimeError:
+                raise
+            return ""
         except Exception as e:
             logger.error(f"Image generation error: {e}")
+            msg = f"Image generation error: {e}"
+            asyncio.ensure_future(telegram_bot.send_message(msg))
+            try:
+                await self._record_failure()
+            except RuntimeError:
+                raise
             return ""
 
     def download_image(self, image_url: str, dest_path: str) -> bool:

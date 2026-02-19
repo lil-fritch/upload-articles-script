@@ -66,7 +66,7 @@ def extract_categories_and_tags(topic: str, keywords: list = None) -> tuple[list
     
     # Add keywords if provided (they're more relevant than topic words)
     tags = []
-    if keywords:
+    if keywords and isinstance(keywords, list):
         tags.extend([k.lower().strip() for k in keywords[:2]])  # Max 2 keywords
     
     # Fill remaining with topic words
@@ -198,7 +198,13 @@ async def upload_article_to_strapi(
         # Extract categories and tags from topic
         keywords = frontmatter.get("keywords", [])
         if isinstance(keywords, str):
-            keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+            # Handle JSON/YAML array string like "[]" or "['word1', 'word2']"
+            keywords = keywords.strip()
+            if keywords == "[]" or not keywords:
+                keywords = []
+            else:
+                # Try to parse as comma-separated values
+                keywords = [k.strip().strip("'\"") for k in keywords.split(",") if k.strip()]
         categories, tags = extract_categories_and_tags(topic, keywords)
 
         payload = {
