@@ -118,7 +118,7 @@ WRITING INSTRUCTIONS:
 - Flow: Do not start with "In this section...". Jump straight into the value.
 - Anti-repetition: Do not repeat the same metric (RTP, volatility, max win) more than once in this section. If it is not essential to this section, omit it.
 - Anti-repetition: Avoid reusing identical phrases from other sections. This section must add new value or angle.
-- Myth-buster pivot: If debunking a claim, state the truth once, then offer a practical alternative path (demo play, welcome bonus types, low-wagering offers, where to play) without naming specific casinos or inventing offers.
+- Myth-buster pivot: If debunking a claim, state the truth naturally in your own words — vary your phrasing across articles. Then offer a practical alternative path (demo play, welcome bonus types, low-wagering offers, where to play) without naming specific casinos or inventing offers.
 - Advice: Prefer 2-3 concrete, actionable tips over generic filler.
 - Headings: Use markdown headers (## or ###) for subsections, NOT HTML.
 

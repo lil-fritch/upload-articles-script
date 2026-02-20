@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # Text Generation Polling Config (for async LLM APIs)
     TEXT_POLL_INTERVAL: float = 1.0
-    TEXT_MAX_WAIT: float = 1.0
+    TEXT_MAX_WAIT: float = 300
 
     # Telegram Config
     TELEGRAM_BOT_TOKEN: str = ""

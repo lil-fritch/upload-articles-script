@@ -75,7 +75,7 @@ VERIFIED FACTS (Use these, ignore hallucinations):
 
 STRATEGY GUIDELINES:
 - IF DIRECT_REVIEW: Standard extensive review.
-- IF MYTH_BUSTER: Title must be "The Truth about [Topic]". debunk the myth.
+- IF MYTH_BUSTER: Debunk the myth with a compelling, unique title. Vary your title structure — use questions ("Does [Topic] Really Exist?"), benefit-driven angles ("The Real Way to..."), or direct statements ("Why [Topic] Doesn't Work"). Never use the same title pattern twice.
 - IF GENRE_OVERVIEW: Do NOT review a single game. Review the category/provider.
 - IF STRATEGY_GUIDE: Focus on "How to Play/Win" rather than specs.
 - Avoid repeating the same facts across multiple sections. Distribute key specs so each section has a unique angle.
