@@ -87,7 +87,7 @@ STRATEGY GUIDELINES:
 Role: You are a Senior Content Strategist.
 Your goal is to create a structured article outline based on the provided topic, facts, and writing strategy.
 
-TOPIC: "{topic}"
+USER QUERY/TOPIC: "{topic}"
 
 {strategy_info}
 
@@ -96,6 +96,17 @@ SPECS:
 
 SEARCH SUMMARY:
 {search_summary}
+
+---
+TITLE GENERATION RULES (CRITICAL):
+1. The main_title MUST reflect the USER QUERY, not just the game name.
+2. If two articles are about the same game but different queries (e.g., "licensed" vs "maximum win"), they MUST have different titles.
+3. For MYTH_BUSTER: Address the specific misconception in the query, not a generic myth.
+   - Query: "best licensed X" → Title: "Is [X] Really Licensed? The Truth" or "Finding Legit Casinos for [X]"
+   - Query: "maximum win potential" → Title: "What's the Max Win in [X]?" or "[X] Win Potential Explained"
+   - Query: "free spins" → Title: "Does [X] Have Free Spins?" or "The Free Spins Myth About [X]"
+4. Never reuse the same title pattern for different queries about the same game.
+---
 
 OUTPUT SCHEMA:
 Return a JSON object with keys: 'main_title' (string), 'seo_slug' (string), 'sections' (list of objects).
