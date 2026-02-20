@@ -151,24 +151,27 @@ def main():
     parser.add_argument("--mode", choices=["planning", "production", "daemon"], default="daemon", help="Pipeline phase to run")
     parser.add_argument("--limit", type=int, default=10, help="Number of articles to generate in production mode")
     parser.add_argument("--save-covers", action="store_true", help="Save generated covers to disk")
-    
+    parser.add_argument("--keep-state", action="store_true", help="Keep daemon state and cache (don't auto-reset)")
+
     args = parser.parse_args()
 
     logger.info("==========================================")
     logger.info(f"Starting Pipeline | Mode: {args.mode.upper()}")
     logger.info("==========================================")
-    
+
     try:
         # Init Shared Resources
         llm = LLMClient()
-        
+
         if args.mode == "planning":
             run_planning_phase(llm)
         elif args.mode == "production":
             asyncio.run(run_production_phase(llm, args.limit))
         elif args.mode == "daemon":
-            asyncio.run(run_daemon_mode(llm, save_covers=args.save_covers))
-        
+            # Auto-reset state by default (for server environments)
+            # Use --keep-state to preserve state between restarts
+            asyncio.run(run_daemon_mode(llm, save_covers=args.save_covers, reset_state=not args.keep_state))
+
         logger.info("==========================================")
         logger.info("Pipeline Finished Successfully.")
         logger.info("==========================================")

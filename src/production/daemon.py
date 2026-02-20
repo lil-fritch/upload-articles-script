@@ -212,9 +212,30 @@ def _select_daily_batch(state: dict, games: list[dict], published_topics: set[st
     return batch
 
 
-def _cleanup_topic_cache() -> None:
+def _cleanup_topic_cache(full: bool = False) -> None:
+    """
+    Clean up topic cache files.
+    
+    Args:
+        full: If True, remove ALL cache files. If False, only remove expired files.
+    """
     if not TOPIC_CACHE_DIR.exists():
         return
+    
+    if full:
+        # Remove all cache files
+        removed = 0
+        for cache_file in TOPIC_CACHE_DIR.glob("*.jsonl"):
+            try:
+                cache_file.unlink()
+                removed += 1
+            except Exception as e:
+                logger.error(f"Failed to remove cache file {cache_file}: {e}")
+        if removed:
+            logger.info(f"Full cache cleanup removed {removed} files.")
+        return
+    
+    # TTL-based cleanup
     ttl_seconds = TOPIC_CACHE_TTL_DAYS * 86400
     now_ts = time.time()
     removed = 0
@@ -230,8 +251,20 @@ def _cleanup_topic_cache() -> None:
         logger.info(f"Cache cleanup removed {removed} files.")
 
 
-async def run_daemon_mode(llm, save_covers: bool = False):
+async def run_daemon_mode(llm, save_covers: bool = False, reset_state: bool = True):
     logger.info("--- Running Phase 2: Production (Daemon) ---")
+
+    # Auto-reset state and cache on startup (for server environments without console access)
+    if reset_state:
+        logger.info("Auto-resetting daemon state and topic cache...")
+        if STATE_PATH.exists():
+            try:
+                STATE_PATH.unlink()
+                logger.info(f"Removed daemon state: {STATE_PATH}")
+            except Exception as e:
+                logger.error(f"Failed to remove daemon state: {e}")
+        _cleanup_topic_cache(full=True)
+        logger.info("Cleared topic cache")
 
     # Step 1: Check Strapi connection (required)
     logger.info("Checking Strapi connection...")
