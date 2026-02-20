@@ -9,6 +9,8 @@ data/db/lancedb_sessions/
 data/output/topic_cache/
 data/output/images/covers/
 data/output/daemon_state.json
+data/output/generated_topics.csv
+data/output/*.bak
 
 # Python cache
 __pycache__/

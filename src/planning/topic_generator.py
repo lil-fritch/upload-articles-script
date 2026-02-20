@@ -158,6 +158,33 @@ class TopicGenerator:
             seed_cat = "GAME"
 
             if tier == 3:
+                # Tier 3: Generate basic topics but still thematic
+                # Focus on core intents: review, demo, play, bonus
+                BASIC_SEGMENTS = ["beginners", "new players", "casual players"]
+                CORE_INTENT = ["review", "demo", "play", "bonus", "casino"]
+                
+                for seg in BASIC_SEGMENTS:
+                    specifics = segment_map.get(seg, [])
+                    full_mods = list(set(specifics + universal_mods))
+                    # Filter to core intents only
+                    active_mods = [m for m in full_mods if any(k in m.lower() for k in CORE_INTENT)]
+                    
+                    for mod in active_mods[:10]:  # Limit modifiers to avoid explosion
+                        mod_cat = self._get_category(mod, mod_classes, default=default_mod_cat)
+                        
+                        if self._is_compatible(seed_cat, mod_cat):
+                            template = self._select_template(game, mod, seed_cat, mod_cat)
+                        else:
+                            template = random.choice(self.templates["standard"])
+                        
+                        topic = template.format(segment=seg, modifier=mod, seed=game)
+                        topic = self._clean_topic(topic)
+                        
+                        if topic not in seen_topics:
+                            all_topics.append(["game_specific", topic])
+                            seen_topics.add(topic)
+                
+                # Also add the basic review topic
                 topic = f"{game} Review & Demo Play"
                 if topic not in seen_topics:
                     all_topics.append(["game_specific", topic])
@@ -167,14 +194,14 @@ class TopicGenerator:
             selected_segments = []
             if tier == 1:
                 PRIORITY_SEGMENTS = [
-                    "beginners", "high rollers", "experienced players", "mobile players", 
+                    "beginners", "high rollers", "experienced players", "mobile players",
                     "bonus hunters", "crypto players", "new players", "professional players",
                     "low budget players", "casual players"
                 ]
                 selected_segments = [s for s in all_segments if s in PRIORITY_SEGMENTS]
                 if not selected_segments:
                     selected_segments = all_segments[:10]
-                    
+
             elif tier == 2:
                 TIER2_SEGMENTS = ["beginners", "high rollers", "mobile players", "bonus hunters"]
                 selected_segments = [s for s in all_segments if s in TIER2_SEGMENTS]

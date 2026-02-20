@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from src.config import OUTPUT_DIR, DB_FILE, settings
 from src.production.graph import GraphBuilder
+from src.planning.game_selector import GameSelector
 from src.utils.filename_utils import get_safe_filename
 from src.utils.logger import setup_logger
 from src.utils.seo_links import apply_game_link
@@ -38,16 +39,54 @@ def _seconds_until_next_day() -> float:
 
 
 def _load_games_ordered() -> list[dict]:
+    """
+    Load games ordered by Tier priority (Tier 1 first, then Tier 2, then Tier 3).
+    Within each tier, games are ordered by ID.
+    Returns list of dicts with game info and tier.
+    """
     games = []
     conn = sqlite3.connect(DB_FILE)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, slug FROM games ORDER BY id ASC")
+        raw_games = []
         for g_id, name, slug in cursor.fetchall():
             if name and slug:
-                games.append({"id": g_id, "name": name, "slug": slug})
+                raw_games.append({"id": g_id, "name": name, "slug": slug})
     finally:
         conn.close()
+    
+    # Get tier classification using GameSelector
+    try:
+        from src.llm_client import LLMClient
+        llm = LLMClient()
+        selector = GameSelector(llm)
+        game_tiers = selector.get_games_with_tiers()  # Returns {"GameName": TierInt}
+        
+        # Assign tiers to games
+        for game in raw_games:
+            tier = game_tiers.get(game["name"], 3)
+            games.append({
+                "id": game["id"],
+                "name": game["name"],
+                "slug": game["slug"],
+                "tier": tier
+            })
+        
+        # Sort by tier (1 first), then by id
+        games.sort(key=lambda x: (x["tier"], x["id"]))
+        
+    except Exception as e:
+        logger.error(f"Failed to classify games by tier: {e}. Using default order.")
+        # Fallback: return games without tier info
+        for game in raw_games:
+            games.append({
+                "id": game["id"],
+                "name": game["name"],
+                "slug": game["slug"],
+                "tier": 3
+            })
+    
     return games
 
 
@@ -55,7 +94,10 @@ def _ensure_topic_cache(game_name: str, game_slug: str) -> Path:
     TOPIC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = TOPIC_CACHE_DIR / f"{game_slug}.jsonl"
     if cache_path.exists():
+        logger.info(f"Topic cache exists for {game_name}: {cache_path}")
         return cache_path
+
+    logger.info(f"Building topic cache for {game_name}...")
 
     if not GENERATED_TOPICS_PATH.exists():
         raise FileNotFoundError(f"Topics file not found at {GENERATED_TOPICS_PATH}")
@@ -66,6 +108,7 @@ def _ensure_topic_cache(game_name: str, game_slug: str) -> Path:
              open(cache_path, "w", encoding="utf-8") as dst:
             reader = csv.reader(src)
             header = next(reader, None)
+            topic_count = 0
             for row in reader:
                 if len(row) < 2:
                     continue
@@ -75,6 +118,8 @@ def _ensure_topic_cache(game_name: str, game_slug: str) -> Path:
                     continue
                 if game_lower in t_topic.lower():
                     dst.write(json.dumps({"type": t_type, "topic": t_topic}, ensure_ascii=False) + "\n")
+                    topic_count += 1
+        logger.info(f"Created topic cache for {game_name} with {topic_count} topics")
     except Exception as e:
         logger.error(f"Failed to build topic cache for {game_name}: {e}")
     return cache_path
@@ -129,6 +174,10 @@ def _build_pending_for_game(game: dict, published_topics: set[str]) -> list[dict
 
 
 def _select_daily_batch(state: dict, games: list[dict], published_topics: set[str], limit: int) -> list[dict]:
+    """
+    Select a batch of topics to process.
+    Prioritizes completing all topics for the current game before moving to the next.
+    """
     batch = []
 
     while len(batch) < limit:
@@ -137,20 +186,27 @@ def _select_daily_batch(state: dict, games: list[dict], published_topics: set[st
             needed = limit - len(batch)
             batch.extend(pending[:needed])
             state["pending_topics"] = pending[needed:]
+            # Don't increment game index until pending is fully exhausted
             if not state["pending_topics"]:
                 state["current_game_index"] += 1
             continue
 
         idx = state.get("current_game_index", 0)
         if idx >= len(games):
-            break
+            logger.info("All games processed. Resetting to start.")
+            state["current_game_index"] = 0
+            idx = 0
 
         game = games[idx]
+        logger.info(f"Checking game {idx + 1}/{len(games)}: {game['name']} (Tier {game['tier']})")
+        
         pending = _build_pending_for_game(game, published_topics)
         if not pending:
+            logger.info(f"No pending topics for {game['name']}, moving to next game.")
             state["current_game_index"] += 1
             continue
 
+        logger.info(f"Found {len(pending)} pending topics for {game['name']}")
         state["pending_topics"] = pending
 
     return batch
@@ -241,23 +297,17 @@ async def run_daemon_mode(llm, save_covers: bool = False):
             continue
 
         for topic_data in batch:
-            game_idx = state.get("current_game_index", 0)
-            current_game = games[game_idx] if game_idx < len(games) else None
+            # Game info is now stored in topic_data from _build_pending_for_game
+            game_name = topic_data.get("game_name", "Unknown")
+            game_slug = topic_data.get("game_slug", "unknown")
+            
             pending_count = len(state.get("pending_topics", []))
-            if current_game and pending_count == 0:
-                pending_count = len(_build_pending_for_game(current_game, published_topics))
-
-            if current_game:
-                logger.info(
-                    "STATUS | Today: %s/%s | Total in Strapi: %s | Game: %s | Pending: %s",
-                    state.get("daily_count", 0), DAILY_LIMIT, len(existing_articles),
-                    current_game.get("name"), pending_count
-                )
-            else:
-                logger.info(
-                    "STATUS | Today: %s/%s | Total in Strapi: %s | Game: none | Pending: 0",
-                    state.get("daily_count", 0), DAILY_LIMIT, len(existing_articles)
-                )
+            
+            logger.info(
+                "STATUS | Today: %s/%s | Total in Strapi: %s | Game: %s (%s) | Pending: %s",
+                state.get("daily_count", 0), DAILY_LIMIT, len(existing_articles),
+                game_name, game_slug, pending_count
+            )
 
             topic_str = topic_data.get("topic", "")
             if not topic_str:
